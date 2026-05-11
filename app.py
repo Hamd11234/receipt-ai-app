@@ -1,155 +1,118 @@
-from flask import Flask, render_template, request, send_from_directory
-import pytesseract
-from PIL import Image
-import re
+from flask import Flask, render_template, request
 import os
+import re
+from PIL import Image
+import pytesseract
 
 app = Flask(__name__)
 
-# Tesseract path
-pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+UPLOAD_FOLDER = "uploads"
 
-UPLOAD_FOLDER = 'uploads'
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-
-# Create uploads folder automatically
+# FIX FOR VERCEL
 if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
+    try:
+        os.makedirs(UPLOAD_FOLDER)
+    except:
+        pass
 
-# Route for uploaded image preview
-@app.route('/uploads/<filename>')
-def uploaded_file(filename):
-    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 
-@app.route('/', methods=['GET', 'POST'])
+
+@app.route("/", methods=["GET", "POST"])
 def index():
-
     extracted_text = ""
-    store = ""
+    store_name = ""
     date = ""
     total = ""
     currency = ""
-    image_path = ""
-    error_message = ""
 
-    if request.method == 'POST':
-
-        file = request.files['receipt']
+    if request.method == "POST":
+        file = request.files["receipt"]
 
         if file:
-
-            # File validation
-            allowed_extensions = ['png', 'jpg', 'jpeg']
-            file_extension = file.filename.split('.')[-1].lower()
-
-            if file_extension not in allowed_extensions:
-                error_message = "Unsupported file type. Please upload JPG, JPEG, or PNG."
-
-                return render_template(
-                    'index.html',
-                    extracted_text=extracted_text,
-                    store=store,
-                    date=date,
-                    total=total,
-                    currency=currency,
-                    image_path=image_path,
-                    error_message=error_message
-                )
-
-            filepath = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
-            file.save(filepath)
-
-            image_path = filepath
+            filepath = os.path.join(app.config["UPLOAD_FOLDER"], file.filename)
 
             try:
-                image = Image.open(filepath)
+                file.save(filepath)
             except:
-                error_message = "Could not read image."
+                filepath = file.filename
 
-                return render_template(
-                    'index.html',
-                    extracted_text=extracted_text,
-                    store=store,
-                    date=date,
-                    total=total,
-                    currency=currency,
-                    image_path=image_path,
-                    error_message=error_message
-                )
+            image = Image.open(file)
 
-            # OCR extraction
             extracted_text = pytesseract.image_to_string(image)
 
-            lines = extracted_text.split('\n')
-
-            # Store name detection
-            ignore_words = ["thank", "total", "cash", "change", "subtotal"]
+            # ---------------- STORE NAME ----------------
+            lines = extracted_text.split("\n")
 
             for line in lines:
+                clean_line = line.strip()
 
-                cleaned = line.strip()
-
-                if (
-                    cleaned
-                    and len(cleaned) > 3
-                    and not any(word in cleaned.lower() for word in ignore_words)
-                    and not any(char.isdigit() for char in cleaned)
-                ):
-
-                    store = cleaned
+                if len(clean_line) > 3 and clean_line.isupper():
+                    store_name = clean_line
                     break
 
-            # Date detection
-            date_patterns = [
-                r'\d{2}/\d{2}/\d{4}',
-                r'\d{2}-\d{2}-\d{4}',
-                r'\d{2}/\d{2}/\d{2}',
-                r'\d{1,2}/\d{1,2}/\d{2,4}'
-            ]
+            # ---------------- DATE ----------------
+            date_match = re.search(
+                r"(\d{2}[/-]\d{2}[/-]\d{2,4})",
+                extracted_text
+            )
 
-            for pattern in date_patterns:
+            if date_match:
+                date = date_match.group(1)
 
-                date_match = re.search(pattern, extracted_text)
+            # ---------------- TOTAL AMOUNT ----------------
+            total_match = re.search(
+                r"(TOTAL|Total|total)\D+(\d+\.\d{2})",
+                extracted_text
+            )
 
-                if date_match:
-                    date = date_match.group()
-                    break
+            if total_match:
+                total = total_match.group(2)
 
-            # Total amount detection
-            all_amounts = re.findall(r'\d+\.\d{2}', extracted_text)
+            # Backup total detection
+            if total == "":
+                all_amounts = re.findall(r"\d+\.\d{2}", extracted_text)
 
-            if all_amounts:
+                if all_amounts:
+                    sorted_amounts = sorted(
+                        [float(x) for x in all_amounts],
+                        reverse=True
+                    )
 
-                numbers = [float(x) for x in all_amounts]
+                    total = str(sorted_amounts[0])
 
-                total = str(max(numbers))
-
-            # Currency detection
+            # ---------------- CURRENCY ----------------
             if "$" in extracted_text:
                 currency = "USD ($)"
-
             elif "RM" in extracted_text:
                 currency = "MYR (RM)"
-
             elif "€" in extracted_text:
                 currency = "EUR (€)"
-
             elif "£" in extracted_text:
                 currency = "GBP (£)"
-
             else:
-                currency = "USD ($)"
+                currency = "Unknown"
+
+            return render_template(
+                "index.html",
+                extracted_text=extracted_text,
+                image_file=filepath,
+                store_name=store_name,
+                date=date,
+                total=total,
+                currency=currency
+            )
 
     return render_template(
-        'index.html',
+        "index.html",
         extracted_text=extracted_text,
-        store=store,
+        image_file=None,
+        store_name=store_name,
         date=date,
         total=total,
-        currency=currency,
-        image_path=image_path,
-        error_message=error_message
+        currency=currency
     )
 
-if __name__ == '__main__':
-    app.run()
+
+if __name__ == "__main__":
+    app.run(debug=True)
