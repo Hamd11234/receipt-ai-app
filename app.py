@@ -96,7 +96,7 @@ def index():
             return render_template(
                 "index.html",
                 extracted_text=extracted_text,
-                image_file=filepath,
+                image_file=None,
                 store_name=store_name,
                 date=date,
                 total=total,
