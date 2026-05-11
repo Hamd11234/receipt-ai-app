@@ -1,25 +1,17 @@
 from flask import Flask, render_template, request
-import os
 import re
+import os
 from PIL import Image
 import pytesseract
 
+# Tesseract path for Windows
+pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+
 app = Flask(__name__)
-
-UPLOAD_FOLDER = "uploads"
-
-# FIX FOR VERCEL
-if not os.path.exists(UPLOAD_FOLDER):
-    try:
-        os.makedirs(UPLOAD_FOLDER)
-    except:
-        pass
-
-app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
-
 
 @app.route("/", methods=["GET", "POST"])
 def index():
+
     extracted_text = ""
     store_name = ""
     date = ""
@@ -27,69 +19,78 @@ def index():
     currency = ""
 
     if request.method == "POST":
+
         file = request.files["receipt"]
 
         if file:
-            filepath = os.path.join(app.config["UPLOAD_FOLDER"], file.filename)
 
-            try:
-                file.save(filepath)
-            except:
-                filepath = file.filename
+            upload_folder = "static"
+            os.makedirs(upload_folder, exist_ok=True)
 
-            image = Image.open(file)
+            image_path = os.path.join(upload_folder, file.filename)
 
+            file.save(image_path)
+
+            image = Image.open(image_path)
+
+            # OCR
             extracted_text = pytesseract.image_to_string(image)
 
-            # ---------------- STORE NAME ----------------
+            # Split lines
             lines = extracted_text.split("\n")
 
-            for line in lines:
-                clean_line = line.strip()
+            # ---------------- STORE NAME ----------------
+            store_name = "Unknown Store"
 
-                if len(clean_line) > 3 and clean_line.isupper():
-                    store_name = clean_line
+            for line in lines:
+
+                clean = line.strip()
+
+                if len(clean) > 3:
+
+                    # Skip useless lines
+                    if any(word in clean.upper() for word in [
+                        "TOTAL",
+                        "CASH",
+                        "CHANGE",
+                        "DATE",
+                        "TIME",
+                        "USD",
+                        "AMOUNT"
+                    ]):
+                        continue
+
+                    # First meaningful line becomes store name
+                    store_name = clean
                     break
 
+            # Common OCR corrections
+            store_name = store_name.replace("TARGE", "TARGET")
+            store_name = store_name.replace("RG", "MORE")
+            store_name = store_name.replace("LESS:", "LESS")
+
             # ---------------- DATE ----------------
-            date_match = re.search(
-                r"(\d{2}[/-]\d{2}[/-]\d{2,4})",
-                extracted_text
-            )
+            date_match = re.search(r"\d{2}/\d{2}/\d{4}", extracted_text)
 
             if date_match:
-                date = date_match.group(1)
+                date = date_match.group()
 
-            # ---------------- TOTAL AMOUNT ----------------
-            total_match = re.search(
-                r"(TOTAL|Total|total)\D+(\d+\.\d{2})",
-                extracted_text
-            )
+            # ---------------- TOTAL ----------------
+            amounts = re.findall(r"\d+\.\d{2}", extracted_text)
 
-            if total_match:
-                total = total_match.group(2)
-
-            # Backup total detection
-            if total == "":
-                all_amounts = re.findall(r"\d+\.\d{2}", extracted_text)
-
-                if all_amounts:
-                    sorted_amounts = sorted(
-                        [float(x) for x in all_amounts],
-                        reverse=True
-                    )
-
-                    total = str(sorted_amounts[0])
+            if amounts:
+                total = max([float(x) for x in amounts])
 
             # ---------------- CURRENCY ----------------
-            if "$" in extracted_text:
+            if "$" in extracted_text or "USD" in extracted_text:
                 currency = "USD ($)"
+
             elif "RM" in extracted_text:
                 currency = "MYR (RM)"
+
             elif "€" in extracted_text:
                 currency = "EUR (€)"
-            elif "£" in extracted_text:
-                currency = "GBP (£)"
+
             else:
                 currency = "Unknown"
 
@@ -112,7 +113,6 @@ def index():
         total=total,
         currency=currency
     )
-
 
 if __name__ == "__main__":
     app.run(debug=True)
